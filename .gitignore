@@ -1,0 +1,26 @@
+# Build
+/target/
+**/*.rs.bk
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Secrets & local env (never commit)
+.env
+.env.*
+!.env.example
+
+# Accidental data dumps
+*.csv
+library.json
+config.json
+**/io.drip.drip/
+
+# Scratch
+/tmp/
+*.tmp
