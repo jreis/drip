@@ -121,7 +121,14 @@ fn draw_filters(frame: &mut Frame, area: Rect, app: &App) {
         ),
         Span::styled(" dup:", Style::default().fg(DIM)),
         Span::styled(
-            format!(" {} ", if app.url_filter.is_some() { "on" } else { "off" }),
+            format!(
+                " {} ",
+                if app.url_filter.is_some() {
+                    "on"
+                } else {
+                    "off"
+                }
+            ),
             Style::default().fg(WARN),
         ),
     ]);
@@ -369,10 +376,9 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
             "j/k year · enter scrub that year · 0 clear · esc",
             Style::default().fg(DIM),
         )),
-        InputMode::ConfirmDelete => Line::from(Span::styled(
-            app.message.clone(),
-            Style::default().fg(BAD),
-        )),
+        InputMode::ConfirmDelete => {
+            Line::from(Span::styled(app.message.clone(), Style::default().fg(BAD)))
+        }
         InputMode::Digest => Line::from(Span::styled(
             "today's dig · enter open · j/k · n skip · z reshuffle · esc dismiss",
             Style::default().fg(WARN),
@@ -599,7 +605,10 @@ fn draw_view_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         };
         let marker = if selected { "▸" } else { " " };
         lines.push(Line::from(vec![
-            Span::styled(format!(" {marker} "), Style::default().fg(GOOD).patch(style)),
+            Span::styled(
+                format!(" {marker} "),
+                Style::default().fg(GOOD).patch(style),
+            ),
             Span::styled(v.name.clone(), style),
         ]));
         lines.push(Line::from(vec![

@@ -482,10 +482,7 @@ impl App {
 
     pub fn toggle_select_all_in_view(&mut self) {
         let all_selected = !self.filtered.is_empty()
-            && self
-                .filtered
-                .iter()
-                .all(|i| self.bulk_selected.contains(i));
+            && self.filtered.iter().all(|i| self.bulk_selected.contains(i));
         if all_selected {
             for i in &self.filtered {
                 self.bulk_selected.remove(i);

@@ -253,7 +253,10 @@ mod tests {
     #[test]
     fn duplicate_groups_empty_when_all_urls_unique() {
         let lib = Library {
-            bookmarks: vec![bm("1", "https://example.com/a"), bm("2", "https://example.com/b")],
+            bookmarks: vec![
+                bm("1", "https://example.com/a"),
+                bm("2", "https://example.com/b"),
+            ],
             ..Default::default()
         };
         assert!(lib.duplicate_groups().is_empty());
