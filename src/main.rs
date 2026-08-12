@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod digest;
+mod export;
 mod health;
 mod import;
 mod merge;
@@ -10,6 +11,7 @@ mod raindrop;
 mod store;
 mod sync;
 mod ui;
+mod views;
 
 use app::{App, InputMode};
 use clap::{Parser, Subcommand};
@@ -82,6 +84,14 @@ enum Commands {
     },
     /// Print library stats and data path
     Stats,
+    /// Export the local library to a file
+    Export {
+        /// Output path (default: drip-export-<timestamp>.<json|csv> in the current directory)
+        path: Option<PathBuf>,
+        /// Write a Raindrop-compatible CSV instead of a full JSON backup
+        #[arg(long)]
+        csv: bool,
+    },
     /// Check link health (dead-link detection)
     Check {
         /// Only recheck links in this state (default: unknown). Use "all" to recheck everything.
@@ -128,6 +138,7 @@ fn main() -> anyhow::Result<()> {
             dry_run,
         }) => cmd_sync(full, prune, dry_run),
         Some(Commands::Stats) => cmd_stats(),
+        Some(Commands::Export { path, csv }) => cmd_export(path, csv),
         Some(Commands::Check {
             only,
             limit,
@@ -310,8 +321,46 @@ fn cmd_stats() -> anyhow::Result<()> {
             println!("dead:    {}", s.link_dead);
             println!("error:   {}", s.link_error);
             println!("redir:   {}", s.link_redirect);
+            println!(
+                "dupes:   {} groups, {} extra copies",
+                s.duplicate_groups, s.duplicate_extra
+            );
             println!("folders: {:?}", lib.folders());
         }
+    }
+    Ok(())
+}
+
+fn cmd_export(path: Option<PathBuf>, csv: bool) -> anyhow::Result<()> {
+    let lib = store::load_library()?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "no library found — run: drip import <csv>\n  path: {}",
+            store::library_path()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        )
+    })?;
+
+    let ext = if csv { "csv" } else { "json" };
+    let path = path.unwrap_or_else(|| {
+        let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+        PathBuf::from(format!("drip-export-{stamp}.{ext}"))
+    });
+
+    if csv {
+        export::export_csv(&lib, &path)?;
+        println!(
+            "exported {} bookmarks to {} (Raindrop-compatible CSV — local status/link health not included)",
+            lib.bookmarks.len(),
+            path.display()
+        );
+    } else {
+        store::save_library_to(&path, &lib)?;
+        println!(
+            "exported {} bookmarks to {} (full JSON backup — same format as the local library)",
+            lib.bookmarks.len(),
+            path.display()
+        );
     }
     Ok(())
 }
@@ -582,6 +631,103 @@ fn run_loop(
                 }
                 _ => {}
             },
+            InputMode::TagBrowser => match key.code {
+                KeyCode::Esc => {
+                    if !app.tag_query.is_empty() {
+                        app.tag_query.clear();
+                        app.rebuild_tag_list();
+                    } else {
+                        app.mode = InputMode::Normal;
+                        app.message.clear();
+                    }
+                }
+                KeyCode::Enter => app.apply_tag_selection(),
+                KeyCode::Down => app.tag_move(1, 20),
+                KeyCode::Up => app.tag_move(-1, 20),
+                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.tag_move(1, 20);
+                }
+                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.tag_move(-1, 20);
+                }
+                KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.tag_move(1, 20);
+                }
+                KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    app.tag_move(-1, 20);
+                }
+                KeyCode::Home => {
+                    app.tag_selected = 0;
+                    app.tag_offset = 0;
+                }
+                KeyCode::End => {
+                    if !app.tag_list.is_empty() {
+                        app.tag_selected = app.tag_list.len() - 1;
+                    }
+                }
+                KeyCode::Backspace => {
+                    app.tag_query.pop();
+                    app.rebuild_tag_list();
+                }
+                // Type-to-filter: all printable chars
+                KeyCode::Char(c)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    app.tag_query.push(c);
+                    app.rebuild_tag_list();
+                }
+                _ => {}
+            },
+            InputMode::DuplicatesBrowser => match key.code {
+                KeyCode::Esc => {
+                    app.mode = InputMode::Normal;
+                    app.message.clear();
+                }
+                KeyCode::Enter => app.apply_dup_selection(),
+                KeyCode::Char('j') | KeyCode::Down => app.dup_move(1, 20),
+                KeyCode::Char('k') | KeyCode::Up => app.dup_move(-1, 20),
+                KeyCode::Char('g') => {
+                    app.dup_selected = 0;
+                    app.dup_offset = 0;
+                }
+                KeyCode::Char('G') if !app.dup_list.is_empty() => {
+                    app.dup_selected = app.dup_list.len() - 1;
+                }
+                _ => {}
+            },
+            InputMode::ViewBrowser => match key.code {
+                KeyCode::Esc => {
+                    app.mode = InputMode::Normal;
+                    app.message.clear();
+                }
+                KeyCode::Enter => app.apply_view_selection(),
+                KeyCode::Char('j') | KeyCode::Down => app.view_move(1, 20),
+                KeyCode::Char('k') | KeyCode::Up => app.view_move(-1, 20),
+                KeyCode::Char('x') | KeyCode::Char('d') => app.delete_selected_view(),
+                KeyCode::Char('g') => {
+                    app.view_selected = 0;
+                    app.view_offset = 0;
+                }
+                KeyCode::Char('G') if !app.views.is_empty() => {
+                    app.view_selected = app.views.len() - 1;
+                }
+                _ => {}
+            },
+            InputMode::ViewSave => match key.code {
+                KeyCode::Esc => {
+                    app.mode = InputMode::Normal;
+                    app.message.clear();
+                }
+                KeyCode::Enter => app.confirm_save_view(),
+                KeyCode::Backspace => {
+                    app.view_name_input.pop();
+                }
+                KeyCode::Char(c) => {
+                    app.view_name_input.push(c);
+                }
+                _ => {}
+            },
             InputMode::YearBrowser => match key.code {
                 KeyCode::Esc => {
                     app.mode = InputMode::Normal;
@@ -595,6 +741,11 @@ fn run_loop(
                 KeyCode::Char('G') if !app.year_list.is_empty() => {
                     app.year_selected = app.year_list.len() - 1;
                 }
+                _ => {}
+            },
+            InputMode::ConfirmDelete => match key.code {
+                KeyCode::Char('y') | KeyCode::Char('Y') => app.confirm_delete(),
+                KeyCode::Esc => app.cancel_delete(),
                 _ => {}
             },
             InputMode::Digest => match key.code {
@@ -637,16 +788,18 @@ fn run_loop(
                     app.message.clear();
                 }
                 KeyCode::Esc => {
-                    if !app.query.is_empty()
-                        || app.domain_filter.is_some()
+                    if !app.bulk_selected.is_empty() {
+                        app.clear_bulk_selection();
+                    } else if !app.query.is_empty() {
+                        app.query.clear();
+                        app.refilter();
+                    } else if app.domain_filter.is_some()
+                        || app.tag_filter.is_some()
+                        || app.url_filter.is_some()
                         || app.year_filter.is_some()
+                        || app.favorite_filter
                     {
-                        if !app.query.is_empty() {
-                            app.query.clear();
-                            app.refilter();
-                        } else {
-                            app.clear_filters();
-                        }
+                        app.clear_filters();
                     }
                 }
                 KeyCode::Char('j') | KeyCode::Down => app.move_sel(1, 0),
@@ -682,10 +835,17 @@ fn run_loop(
                 KeyCode::Char(' ') => app.cycle_status(),
                 KeyCode::Char('d') => app.mark_done(),
                 KeyCode::Char('n') => app.mark_skipped(),
+                KeyCode::Char('v') => app.toggle_bulk_selected(),
+                KeyCode::Char('V') => app.toggle_select_all_in_view(),
                 KeyCode::Char('f') => app.toggle_folder_filter(),
                 KeyCode::Char('s') => app.cycle_status_filter(),
                 KeyCode::Char('l') => app.cycle_link_filter(),
                 KeyCode::Char('D') => app.open_domain_browser(),
+                KeyCode::Char('T') => app.open_tag_browser(),
+                KeyCode::Char('F') => app.toggle_favorite_filter(),
+                KeyCode::Char('U') => app.open_duplicates_browser(),
+                KeyCode::Char('o') => app.open_view_browser(),
+                KeyCode::Char('O') => app.begin_save_view(),
                 KeyCode::Char('Y') => app.open_year_browser(),
                 KeyCode::Char('.') => app.filter_domain_from_selected(),
                 KeyCode::Char('0') => app.clear_filters(),
@@ -697,6 +857,7 @@ fn run_loop(
                         app.cancel_checks();
                     }
                 }
+                KeyCode::Char('X') => app.request_delete(),
                 KeyCode::Char('r') => {
                     app.random_pick();
                 }

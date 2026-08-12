@@ -15,9 +15,12 @@ Most of us capture faster than we revisit. `drip` is a terminal surface for *rev
 - **TUI** with vim-ish navigation and fuzzy search
 - **Local status** — unread → reading → done → skipped (not pushed back to Raindrop)
 - **CSV import** and **OAuth API sync** (pull-only; merge preserves local progress)
+- **Export** to JSON (full backup) or Raindrop-compatible CSV (`drip export`)
+- **Bulk actions** — multi-select rows and mark/skip/cycle them together
 - **Dead-link detection** — concurrent HEAD/GET, filter by health
 - **Today’s dig** — a few never-opened, not-dead picks on launch
-- **Domain browser** and **year scrub** for cleaning large libraries
+- **Domain browser**, **tag browser**, **favorites filter**, **duplicate URL finder**, **saved views**, and **year scrub** for cleaning large libraries
+- **Reading-time estimate** from the excerpt (list and detail pane)
 - **Serendipity** — random never-opened pick (`r`)
 
 ## Install
@@ -77,6 +80,7 @@ Config is stored with mode `0600` (Unix). Paths:
 |--|-----------------|
 | Config | `~/Library/Application Support/io.drip.drip/config.json` |
 | Library | `~/Library/Application Support/io.drip.drip/library.json` |
+| Saved views | `~/Library/Application Support/io.drip.drip/views.json` |
 
 Run `drip auth --status` / `drip stats` to print the resolved paths on your machine.
 
@@ -114,6 +118,11 @@ Glyphs: `?` unchecked · `●` alive · `✗` dead · `!` error · `↗` redirec
 | `l` | Cycle link-health filter |
 | `D` | Domain browser |
 | `.` | Filter to domain of selection |
+| `T` | Tag browser |
+| `F` | Toggle favorites-only filter |
+| `U` | Duplicate URLs browser |
+| `o` | Saved views browser (load / delete) |
+| `O` | Save current filters as a view |
 | `Y` | Year scrub picker |
 | `0` | Clear all filters |
 | `enter` | Open URL |
@@ -121,6 +130,9 @@ Glyphs: `?` unchecked · `●` alive · `✗` dead · `!` error · `↗` redirec
 | `space` | Cycle local status |
 | `d` | Mark done |
 | `n` | Skip |
+| `X` | Delete selected (or bulk selection) — asks to confirm, local only |
+| `v` | Toggle bulk-selection on this row |
+| `V` | Select / deselect all rows in view |
 | `r` | Random never-opened (skips dead) |
 | `z` | Today’s dig |
 | `c` / `C` | Link check selected / view |
@@ -128,6 +140,8 @@ Glyphs: `?` unchecked · `●` alive · `✗` dead · `!` error · `↗` redirec
 | `w` | Save library now |
 | `?` | Help |
 | `q` | Quit (auto-saves if dirty) |
+
+With a bulk selection active (`v` on any row), `space` / `d` / `n` apply to every selected row instead of just the highlighted one.
 
 ## Privacy
 

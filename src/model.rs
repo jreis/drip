@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Local reading status — independent of Raindrop folders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -108,9 +108,31 @@ pub struct Bookmark {
     pub link_error: Option<String>,
 }
 
+/// Words-per-minute used for the excerpt-based reading estimate.
+const READING_WPM: usize = 200;
+
 impl Bookmark {
     pub fn domain(&self) -> String {
         url::host_from_url(&self.url).unwrap_or_else(|| "—".into())
+    }
+
+    /// Approximate reading time in minutes, from the Raindrop excerpt alone —
+    /// drip doesn't fetch full page text, so this is a lower bound, not the
+    /// time to read the whole page. `None` when there's no excerpt to measure.
+    pub fn reading_minutes(&self) -> Option<u32> {
+        let words = self.excerpt.split_whitespace().count();
+        if words == 0 {
+            return None;
+        }
+        Some(words.div_ceil(READING_WPM) as u32)
+    }
+
+    pub fn reading_time_short(&self) -> String {
+        match self.reading_minutes() {
+            Some(m) if m < 60 => format!("{m}m"),
+            Some(m) => format!("{}h", m / 60),
+            None => "—".into(),
+        }
     }
 
     pub fn search_blob(&self) -> String {
@@ -163,6 +185,80 @@ impl Bookmark {
                 format!("{}{code}{when}{err}", h.as_str())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bm(id: &str, url: &str) -> Bookmark {
+        Bookmark {
+            id: id.into(),
+            title: String::new(),
+            note: String::new(),
+            excerpt: String::new(),
+            url: url.into(),
+            folder: String::new(),
+            tags: vec![],
+            created: None,
+            favorite: false,
+            status: Status::Unread,
+            open_count: 0,
+            last_opened: None,
+            link_health: LinkHealth::Unknown,
+            link_status_code: None,
+            link_checked_at: None,
+            link_error: None,
+        }
+    }
+
+    #[test]
+    fn duplicate_groups_finds_shared_urls_only() {
+        let lib = Library {
+            bookmarks: vec![
+                bm("1", "https://example.com/a"),
+                bm("2", "https://example.com/b"),
+                bm("3", "https://example.com/a"),
+                bm("4", "https://example.com/c"),
+                bm("5", "https://example.com/a"),
+            ],
+            ..Default::default()
+        };
+        let groups = lib.duplicate_groups();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, "https://example.com/a");
+        assert_eq!(groups[0].1, vec![0, 2, 4]);
+
+        let stats = lib.stats();
+        assert_eq!(stats.duplicate_groups, 1);
+        assert_eq!(stats.duplicate_extra, 2);
+    }
+
+    #[test]
+    fn reading_minutes_from_excerpt_word_count() {
+        let mut b = bm("1", "https://example.com/a");
+        assert_eq!(b.reading_minutes(), None);
+        assert_eq!(b.reading_time_short(), "—");
+
+        b.excerpt = "one two three".into();
+        assert_eq!(b.reading_minutes(), Some(1));
+        assert_eq!(b.reading_time_short(), "1m");
+
+        b.excerpt = "word ".repeat(250);
+        assert_eq!(b.reading_minutes(), Some(2));
+        assert_eq!(b.reading_time_short(), "2m");
+    }
+
+    #[test]
+    fn duplicate_groups_empty_when_all_urls_unique() {
+        let lib = Library {
+            bookmarks: vec![bm("1", "https://example.com/a"), bm("2", "https://example.com/b")],
+            ..Default::default()
+        };
+        assert!(lib.duplicate_groups().is_empty());
+        assert_eq!(lib.stats().duplicate_groups, 0);
+        assert_eq!(lib.stats().duplicate_extra, 0);
     }
 }
 
@@ -227,7 +323,22 @@ impl Library {
                 LinkHealth::Error => s.link_error += 1,
             }
         }
+        let dup_groups = self.duplicate_groups();
+        s.duplicate_groups = dup_groups.len();
+        s.duplicate_extra = dup_groups.iter().map(|(_, v)| v.len() - 1).sum();
         s
+    }
+
+    /// Groups of bookmarks that share the same URL, largest group first.
+    pub fn duplicate_groups(&self) -> Vec<(String, Vec<usize>)> {
+        let mut map: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, b) in self.bookmarks.iter().enumerate() {
+            map.entry(b.url.clone()).or_default().push(i);
+        }
+        let mut groups: Vec<(String, Vec<usize>)> =
+            map.into_iter().filter(|(_, v)| v.len() > 1).collect();
+        groups.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then(a.0.cmp(&b.0)));
+        groups
     }
 
     pub fn apply_check_result(&mut self, result: &crate::health::CheckResult) -> bool {
@@ -258,4 +369,6 @@ pub struct LibraryStats {
     pub link_redirect: usize,
     pub link_dead: usize,
     pub link_error: usize,
+    pub duplicate_groups: usize,
+    pub duplicate_extra: usize,
 }

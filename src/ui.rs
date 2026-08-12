@@ -41,6 +41,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     match app.mode {
         InputMode::Help => draw_help(frame, area),
         InputMode::DomainBrowser => draw_domain_browser(frame, area, app),
+        InputMode::TagBrowser => draw_tag_browser(frame, area, app),
+        InputMode::DuplicatesBrowser => draw_duplicates_browser(frame, area, app),
+        InputMode::ViewBrowser => draw_view_browser(frame, area, app),
         InputMode::YearBrowser => draw_year_browser(frame, area, app),
         InputMode::Digest => draw_digest(frame, area, app),
         _ => {}
@@ -70,12 +73,23 @@ fn draw_title(frame: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(DIM),
         ),
     ]);
+    let title = if app.bulk_selected.is_empty() {
+        title
+    } else {
+        let mut spans = title.spans;
+        spans.push(Span::styled(
+            format!("  ·  {} selected", app.bulk_selected.len()),
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ));
+        Line::from(spans)
+    };
     frame.render_widget(Paragraph::new(title), area);
 }
 
 fn draw_filters(frame: &mut Frame, area: Rect, app: &App) {
     let folder = app.folder_filter.as_deref().unwrap_or("all");
     let domain = app.domain_filter.as_deref().unwrap_or("all");
+    let tag = app.tag_filter.as_deref().unwrap_or("all");
     let year = app
         .year_filter
         .map(|y| y.to_string())
@@ -86,6 +100,8 @@ fn draw_filters(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(format!(" {folder} "), Style::default().fg(WARN)),
         Span::styled(" domain:", Style::default().fg(DIM)),
         Span::styled(format!(" {domain} "), Style::default().fg(WARN)),
+        Span::styled(" tag:", Style::default().fg(DIM)),
+        Span::styled(format!(" {tag} "), Style::default().fg(WARN)),
         Span::styled(" year:", Style::default().fg(DIM)),
         Span::styled(format!(" {year} "), Style::default().fg(WARN)),
         Span::styled(" status:", Style::default().fg(DIM)),
@@ -96,6 +112,16 @@ fn draw_filters(frame: &mut Frame, area: Rect, app: &App) {
         Span::styled(" links:", Style::default().fg(DIM)),
         Span::styled(
             format!(" {} ", app.link_filter.label()),
+            Style::default().fg(WARN),
+        ),
+        Span::styled(" fav:", Style::default().fg(DIM)),
+        Span::styled(
+            format!(" {} ", if app.favorite_filter { "only" } else { "all" }),
+            Style::default().fg(WARN),
+        ),
+        Span::styled(" dup:", Style::default().fg(DIM)),
+        Span::styled(
+            format!(" {} ", if app.url_filter.is_some() { "on" } else { "off" }),
             Style::default().fg(WARN),
         ),
     ]);
@@ -126,6 +152,7 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, visible: usize) {
             let b = &app.library.bookmarks[idx];
             let abs = app.list_offset + row;
             let selected = abs == app.selected;
+            let bulk_marked = app.bulk_selected.contains(&idx);
             let style = if selected {
                 Style::default().bg(Color::Rgb(30, 40, 50)).fg(Color::White)
             } else {
@@ -140,10 +167,18 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, visible: usize) {
             let title = if b.title.is_empty() {
                 b.url.clone()
             } else {
-                truncate(&b.title, area.width.saturating_sub(26) as usize)
+                truncate(&b.title, area.width.saturating_sub(34) as usize)
             };
 
             let line = Line::from(vec![
+                Span::styled(
+                    if bulk_marked { "✓ " } else { "  " },
+                    if selected {
+                        Style::default().fg(ACCENT).bg(Color::Rgb(30, 40, 50))
+                    } else {
+                        Style::default().fg(ACCENT)
+                    },
+                ),
                 Span::styled(
                     format!(" {} ", b.status.glyph()),
                     if selected {
@@ -153,10 +188,22 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, visible: usize) {
                     },
                 ),
                 Span::styled(
+                    if b.favorite { "★ " } else { "  " },
+                    if selected {
+                        Style::default().fg(WARN).bg(Color::Rgb(30, 40, 50))
+                    } else {
+                        Style::default().fg(WARN)
+                    },
+                ),
+                Span::styled(
                     format!("{} ", b.link_health.glyph()),
                     link_style(b.link_health, selected),
                 ),
                 Span::styled(format!("{created} "), Style::default().fg(DIM).patch(style)),
+                Span::styled(
+                    format!("{:>3} ", b.reading_time_short()),
+                    Style::default().fg(DIM).patch(style),
+                ),
                 Span::styled(
                     title,
                     style.add_modifier(if selected {
@@ -221,6 +268,13 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         b.note.clone()
     };
+    let reading = match b.reading_minutes() {
+        Some(m) => format!(
+            "~{m} min from excerpt ({} words) — not the full page",
+            b.excerpt.split_whitespace().count()
+        ),
+        None => "—".into(),
+    };
 
     let text = vec![
         Line::from(Span::styled(
@@ -232,11 +286,13 @@ fn draw_detail(frame: &mut Frame, area: Rect, app: &App) {
         line_kv("domain", &domain),
         line_kv("folder", &b.folder),
         line_kv("tags", &tags),
+        line_kv("favorite", if b.favorite { "yes" } else { "no" }),
         line_kv("created", &created),
         line_kv("status", status),
         line_kv("link", &link),
         line_kv("opens", &opens),
         line_kv("last open", &last),
+        line_kv("read time", &reading),
         Line::from(""),
         Line::from(Span::styled("excerpt", Style::default().fg(DIM))),
         Line::from(excerpt),
@@ -279,9 +335,43 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
                 ])
             }
         }
+        InputMode::TagBrowser => {
+            if app.tag_query.is_empty() {
+                Line::from(Span::styled(
+                    "↑↓/ctrl-j/k move · type to filter · enter apply · esc close",
+                    Style::default().fg(DIM),
+                ))
+            } else {
+                Line::from(vec![
+                    Span::styled(" tag/ ", Style::default().fg(Color::Black).bg(ACCENT)),
+                    Span::raw(format!("{}█", app.tag_query)),
+                    Span::styled(
+                        format!("  ({} matches)", app.tag_list.len()),
+                        Style::default().fg(DIM),
+                    ),
+                ])
+            }
+        }
+        InputMode::DuplicatesBrowser => Line::from(Span::styled(
+            "j/k move · enter view group (filters main list) · esc close",
+            Style::default().fg(DIM),
+        )),
+        InputMode::ViewBrowser => Line::from(Span::styled(
+            "j/k move · enter load view · x delete · esc close",
+            Style::default().fg(DIM),
+        )),
+        InputMode::ViewSave => Line::from(vec![
+            Span::styled(" name/ ", Style::default().fg(Color::Black).bg(ACCENT)),
+            Span::raw(format!("{}█", app.view_name_input)),
+            Span::styled("  enter save · esc cancel", Style::default().fg(DIM)),
+        ]),
         InputMode::YearBrowser => Line::from(Span::styled(
             "j/k year · enter scrub that year · 0 clear · esc",
             Style::default().fg(DIM),
+        )),
+        InputMode::ConfirmDelete => Line::from(Span::styled(
+            app.message.clone(),
+            Style::default().fg(BAD),
         )),
         InputMode::Digest => Line::from(Span::styled(
             "today's dig · enter open · j/k · n skip · z reshuffle · esc dismiss",
@@ -289,7 +379,14 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &App) {
         )),
         InputMode::Normal => {
             let msg = if app.message.is_empty() {
-                "j/k · / search · D domains · Y years · z digest · c check · ? help · q quit".into()
+                if !app.bulk_selected.is_empty() {
+                    format!(
+                        "{} selected — d done · n skip · space cycle · X delete · esc clear",
+                        app.bulk_selected.len()
+                    )
+                } else {
+                    "j/k · / search · D domains · T tags · F favorites · U dupes · Y years · v select · o views · z digest · c check · X delete · ? help · q quit".into()
+                }
             } else {
                 app.message.clone()
             };
@@ -360,6 +457,161 @@ fn draw_domain_browser(frame: &mut Frame, area: Rect, app: &mut App) {
         .collect();
 
     frame.render_widget(List::new(items), inner);
+}
+
+fn draw_tag_browser(frame: &mut Frame, area: Rect, app: &mut App) {
+    let popup = centered_rect(60, 75, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(
+            " tags (by count) ",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let visible = inner.height as usize;
+    if app.tag_selected < app.tag_offset {
+        app.tag_offset = app.tag_selected;
+    } else if app.tag_selected >= app.tag_offset + visible {
+        app.tag_offset = app.tag_selected + 1 - visible;
+    }
+    let end = (app.tag_offset + visible).min(app.tag_list.len());
+
+    let items: Vec<ListItem> = app.tag_list[app.tag_offset..end]
+        .iter()
+        .enumerate()
+        .map(|(row, (name, count))| {
+            let abs = app.tag_offset + row;
+            let selected = abs == app.tag_selected;
+            let style = if selected {
+                Style::default()
+                    .bg(Color::Rgb(30, 40, 50))
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let active = app.tag_filter.as_deref() == Some(name.as_str());
+            let marker = if active { "▸ " } else { "  " };
+            ListItem::new(Line::from(vec![
+                Span::styled(marker, Style::default().fg(GOOD).patch(style)),
+                Span::styled(
+                    format!("{count:>5}  "),
+                    Style::default().fg(DIM).patch(style),
+                ),
+                Span::styled(name.clone(), style),
+            ]))
+        })
+        .collect();
+
+    frame.render_widget(List::new(items), inner);
+}
+
+fn draw_duplicates_browser(frame: &mut Frame, area: Rect, app: &mut App) {
+    let popup = centered_rect(66, 75, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(
+            " duplicate URLs (by copies) ",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let visible = inner.height as usize;
+    if app.dup_selected < app.dup_offset {
+        app.dup_offset = app.dup_selected;
+    } else if app.dup_selected >= app.dup_offset + visible {
+        app.dup_offset = app.dup_selected + 1 - visible;
+    }
+    let end = (app.dup_offset + visible).min(app.dup_list.len());
+
+    let items: Vec<ListItem> = app.dup_list[app.dup_offset..end]
+        .iter()
+        .enumerate()
+        .map(|(row, (url, indices))| {
+            let abs = app.dup_offset + row;
+            let selected = abs == app.dup_selected;
+            let style = if selected {
+                Style::default()
+                    .bg(Color::Rgb(30, 40, 50))
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let active = app.url_filter.as_deref() == Some(url.as_str());
+            let marker = if active { "▸ " } else { "  " };
+            ListItem::new(Line::from(vec![
+                Span::styled(marker, Style::default().fg(GOOD).patch(style)),
+                Span::styled(
+                    format!("{:>2}× ", indices.len()),
+                    Style::default().fg(DIM).patch(style),
+                ),
+                Span::styled(truncate(url, inner.width.saturating_sub(8) as usize), style),
+            ]))
+        })
+        .collect();
+
+    frame.render_widget(List::new(items), inner);
+}
+
+fn draw_view_browser(frame: &mut Frame, area: Rect, app: &mut App) {
+    let popup = centered_rect(66, 65, area);
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT))
+        .title(Span::styled(
+            " saved views ",
+            Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+        ));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    let visible = (inner.height / 2).max(1) as usize;
+    if app.view_selected < app.view_offset {
+        app.view_offset = app.view_selected;
+    } else if app.view_selected >= app.view_offset + visible {
+        app.view_offset = app.view_selected + 1 - visible;
+    }
+    let end = (app.view_offset + visible).min(app.views.len());
+
+    let mut lines: Vec<Line> = Vec::new();
+    for (row, v) in app.views[app.view_offset..end].iter().enumerate() {
+        let abs = app.view_offset + row;
+        let selected = abs == app.view_selected;
+        let style = if selected {
+            Style::default()
+                .bg(Color::Rgb(30, 40, 50))
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let marker = if selected { "▸" } else { " " };
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {marker} "), Style::default().fg(GOOD).patch(style)),
+            Span::styled(v.name.clone(), style),
+        ]));
+        lines.push(Line::from(vec![
+            Span::raw("     "),
+            Span::styled(
+                truncate(&v.summary(), inner.width.saturating_sub(6) as usize),
+                Style::default().fg(DIM),
+            ),
+        ]));
+    }
+
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 fn draw_year_browser(frame: &mut Frame, area: Rect, app: &App) {
@@ -515,6 +767,10 @@ fn draw_help(frame: &mut Frame, area: Rect) {
    f           cycle folder
    s           cycle status       l        cycle link health
    D           domain browser     .        filter domain of selected
+   T           tag browser
+   F           toggle favorites-only filter
+   U           duplicate URLs browser
+   o           saved views browser  O  save current filters as a view
    Y           year scrub picker  cycle year with shift-y feel via Y menu
    0           clear ALL filters
    esc         clear search / close overlays
@@ -531,8 +787,17 @@ fn draw_help(frame: &mut Frame, area: Rect) {
    c           check selected     C        recheck all in view
    ctrl-c      check unchecked in view     x  cancel
 
+ BULK
+   v           toggle selection on this row
+   V           select / deselect all in current view
+   (with a selection active: d/n/space/X act on the whole selection)
+
  STATUS
    space       cycle status       d        mark done
+
+ DELETE
+   X           delete selected (or bulk selection) — asks y/esc to confirm
+               local only: reappears on next sync if still on Raindrop
 
  GENERAL
    w save   ? help   q quit
